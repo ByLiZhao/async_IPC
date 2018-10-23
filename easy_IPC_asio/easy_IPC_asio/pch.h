@@ -15,8 +15,10 @@
 #include <string>
 #include <memory>
 #include <queue>
-#include <mutex>     
+#include <mutex>    
+#include <math.h> 
 #include <boost/asio.hpp>
+
 
 
 

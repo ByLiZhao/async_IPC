@@ -1,7 +1,7 @@
-#ifndef _EASY_IPC_TCP_SERVER
-#define _EASY_IPC_TCP_SERVER
 #include "pch.h"
 #include "tcp_connection.h"
+#ifndef _EASY_IPC_TCP_SERVER
+#define _EASY_IPC_TCP_SERVER
 
 namespace easy_IPC {
 
@@ -10,7 +10,7 @@ namespace easy_IPC {
 	public:
 		tcp_server(boost::asio::io_context& io_context, unsigned short port_number)
 			:port_number_(port_number),
-			acceptor_(io_context, tcp::endpoint(tcp::v4(), port_number_))
+			acceptor_(io_context, tcp::endpoint(tcp::v4(), port_number))
 		{
 			init(io_context);
 		}
@@ -38,10 +38,24 @@ namespace easy_IPC {
 			connected = single_connection_->is_connected();
 		}
 
-		void restart() {//restart is not thread safe, it is the caller's responsibility that 
-			//during restarting, no other thread is calling receive() and send() on this object
-			shutdown();
-			init(acceptor_.get_io_context());
+		void end_talk() {
+			if (!(single_connection_->is_connected())) {
+				single_connection_->send_message(std::string());
+			}
+			single_connection_->close_self();
+			accept();
+		}
+		
+		void shutdown() {
+			//if shutdown is not called explicitly, the underlying connection will be destroyed 
+			//when destructor of server instance is called.
+			single_connection_->set_is_connected(false);
+			if (single_connection_ != nullptr) {
+				single_connection_->close_self();
+			}
+			single_connection_ = nullptr; 
+			work_ = nullptr;
+			thread_.join();
 		}
 
 	private:
@@ -54,14 +68,22 @@ namespace easy_IPC {
 				io_context.run();
 			}
 			);
-			acceptor_.async_accept(
-				single_connection_->socket(),
-				[this](const boost::system::error_code& error) {
-				handle_accept(single_connection_, error);
+
+			accept();
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+
+		void accept() {
+			single_connection_->strand().post(
+				[&, this]() {
+				acceptor_.async_accept(
+					single_connection_->socket(),
+					[this](const boost::system::error_code& error) {
+					handle_accept(single_connection_, error);
+				}
+				);
 			}
 			);
-
-			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		}
 
 
@@ -74,16 +96,6 @@ namespace easy_IPC {
 				//connection_->send_current_time();
 				connection_->start_read();
 			}
-		}
-
-		void shutdown() {
-			single_connection_->set_is_connected(false);
-			if (single_connection_ != nullptr) {
-				single_connection_->close_self();
-			}
-			single_connection_ = nullptr; //the old connection will be destryped automatically for all shared_pointer destructed
-			work_ = nullptr;
-			thread_.join();
 		}
 
 		unsigned short port_number_;

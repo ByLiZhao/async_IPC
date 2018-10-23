@@ -1,8 +1,7 @@
-#ifndef _EASY_IPC_TCP_CLIENT
-#define _EASY_IPC_TCP_CLIENT
-
 #include "pch.h"
 #include "tcp_connection.h"
+#ifndef _EASY_IPC_TCP_CLIENT
+#define _EASY_IPC_TCP_CLIENT
 
 namespace easy_IPC {
 
@@ -40,14 +39,28 @@ namespace easy_IPC {
 			connected = single_connection_->is_connected();
 		}
 
-		void restart() {//restart is not thread safe, it is the caller's responsibility that 
-			//during restarting, no other thread is calling receive() and send() on this object
-			shutdown();
-			init(resolver_.get_io_context());
+		void end_talk() {
+			if (!(single_connection_->is_connected())) {
+				single_connection_->send_message(std::string());
+			}
+			single_connection_->close_self();
+		}
+
+		void re_connect() {
+			resolve(host_name_, port_number_);
+		}
+
+		void shutdown() {
+			single_connection_->set_is_connected(false);
+			if (single_connection_ != nullptr) {
+				single_connection_->close_self();
+			}
+			single_connection_ = nullptr;
+			work_ = nullptr;
+			thread_.join();
 		}
 
 	private:
-
 		void init(boost::asio::io_context& io_context) {
 			work_ = std::make_shared<boost::asio::io_context::work>(io_context);
 			single_connection_ = tcp_connection::create(io_context);
@@ -58,15 +71,18 @@ namespace easy_IPC {
 			}
 			);
 
-			tcp::resolver::query resolver_query_(host_name_, port_number_);
+			resolve(host_name_, port_number_);
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+
+		void resolve(std::string host_name, std::string port_number) {
+			tcp::resolver::query resolver_query_(host_name, port_number);
 			resolver_.async_resolve(resolver_query_,
 				[this](const boost::system::error_code& error,
 					tcp::resolver::results_type results) {
 				this->resolve_handler(error, results);
 			}
 			);
-
-			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		}
 
 		void resolve_handler(
@@ -93,21 +109,12 @@ namespace easy_IPC {
 		{
 			if (!error) {
 				single_connection_->set_is_connected(true);
-				std::cout << "start read" << std::endl;
 				single_connection_->start_read();
 				//single_connection_->send_current_time();
 			}
 		}
 
-		void shutdown() {
-			single_connection_->set_is_connected(false);
-			if (single_connection_ != nullptr) {
-				single_connection_->close_self();
-			}
-			single_connection_ = nullptr;
-			work_ = nullptr;
-			thread_.join();
-		}
+		
 
 		std::string host_name_;
 		std::string port_number_;

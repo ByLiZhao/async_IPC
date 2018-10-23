@@ -1,8 +1,6 @@
+#include "pch.h"
 #ifndef _EASY_IPC_TCP_CONNECTION
 #define _EASY_IPC_TCP_CONNECTION
-
-#include "pch.h"
-
 
 namespace easy_IPC {
 
@@ -50,6 +48,10 @@ namespace easy_IPC {
 			return socket_;
 		}
 
+		boost::asio::io_context::strand& strand() {//getter for strand
+			return strand_;
+		}
+
 		void close_self() {
 			auto self(shared_from_this());
 			strand_.post(
@@ -76,15 +78,15 @@ namespace easy_IPC {
 		}
 
 		void send_message(std::string str) {//let strand so the synchronization
-			const uint16_t limit_ = 65535;	//2^16-1;
 			auto self(shared_from_this());
-
-			if (str.size() > limit_ || str.size()==0)//2^16-1
-			{
-				return;
+			std::string my_string;
+			if (str.size() > limit_)//2^16-1
+			{//truncate if the string is too large
+				my_string = convert_to_char_array(limit_) + std::string(str.c_str(), limit_);
 			}
-
-			std::string my_string = convert_to_char_array(static_cast<uint16_t>(str.size())) + str;
+			else {
+				my_string = convert_to_char_array(static_cast<uint16_t>(str.size())) + str;
+			}
 			strand_.post(
 				[this, self, my_string]() {
 				strand_send(my_string);
@@ -102,12 +104,7 @@ namespace easy_IPC {
 		}
 
 		void set_is_connected(bool yes_or_no) {
-			auto self(shared_from_this());
-			strand_.post(
-				[this, self, yes_or_no]() {
-				is_connected_ = yes_or_no;
-			}
-			);
+			is_connected_ = yes_or_no;
 		}
 
 		bool is_connected() {
@@ -150,7 +147,7 @@ namespace easy_IPC {
 					after_sent();
 				}
 				else {
-					handle_send_error(error, byte_transferred);
+					handle_error(error, byte_transferred);
 				}
 			}
 			);
@@ -175,12 +172,8 @@ namespace easy_IPC {
 				[this, self](boost::system::error_code error, std::size_t byte_transferred) {
 				if (!error) {
 					data_length_ = convert_to_uint16_t(std::string((char *)data_length_char_array_.data(), 2));
-					if (data_length_ == 0) {//ignore black message
-						strand_.post(
-							[this, self]() {
-							read_length();
-						}
-						);
+					if (data_length_ == 0) {//close connection
+						close_self();
 					}
 					else {
 						strand_.post(
@@ -191,7 +184,7 @@ namespace easy_IPC {
 					}
 				}
 				else {
-					handle_read_error(error, byte_transferred);
+					handle_error(error, byte_transferred);
 				}
 			}
 			);
@@ -210,7 +203,7 @@ namespace easy_IPC {
 				if (!error) {
 					{
 						std::lock_guard<std::mutex> my_lock_guard(this->in_box_mutex_);
-						
+
 						const char * data_ptr = backup_string_.data();
 						in_box_.push(std::string(data_ptr, data_length_));//make string size work properly
 					}
@@ -221,29 +214,19 @@ namespace easy_IPC {
 					);
 				}
 				else {
-					handle_read_error(error, byte_transferred);
+					handle_error(error, byte_transferred);
 				}
 			}
 			);
 		}
 
-		void handle_read_error(const boost::system::error_code& error,
+		void handle_error(const boost::system::error_code& error,
 			size_t byte_transferred) {
 			if (error) {
-				is_connected_ = false;
-				boost::system::error_code error;
-				socket_.shutdown(tcp::socket::shutdown_type::shutdown_receive, error);
+				close_self();
 			}
 		}
 
-		void handle_send_error(const boost::system::error_code& error,
-			size_t byte_transferred) {
-			if (error) {
-				is_connected_ = false;
-				boost::system::error_code error;
-				socket_.shutdown(tcp::socket::shutdown_type::shutdown_send, error);
-			}
-		}
 
 		tcp::socket socket_;
 		boost::asio::io_context::strand strand_;
@@ -254,7 +237,8 @@ namespace easy_IPC {
 		uint16_t data_length_;
 		std::string backup_string_;
 		std::mutex in_box_mutex_;
-		volatile bool is_connected_;
+		std::atomic_bool is_connected_;
+		const uint16_t limit_ = 65535;	//2^16-1;
 	};
 
 }
